@@ -1,0 +1,1213 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="description" content="Ficha local de entrenamiento para celular">
+  <title>Ficha de Entrenamiento</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.9/dist/chart.umd.min.js"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: '#070b12',
+            panel: '#101827',
+            panel2: '#172033',
+            line: '#263246',
+            limefire: '#a3e635'
+          },
+          boxShadow: {
+            glow: '0 0 0 1px rgba(163,230,53,.18), 0 18px 60px rgba(0,0,0,.35)'
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    html { background: #070b12; color-scheme: dark; }
+    body {
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 10% 0%, rgba(34, 197, 94, .12), transparent 32rem),
+        linear-gradient(180deg, #0b1020 0%, #070b12 45%, #05070d 100%);
+    }
+    input, textarea, select { font-size: 16px; }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    details summary::-webkit-details-marker { display: none; }
+    .safe-bottom { padding-bottom: max(1.25rem, env(safe-area-inset-bottom)); }
+  </style>
+</head>
+<body class="text-slate-100 antialiased">
+  <div id="app" class="mx-auto flex min-h-screen w-full max-w-3xl flex-col"></div>
+
+  <script>
+    const DB_KEY = 'workout_app_db';
+    const TABS = [
+      ['routine', 'Rutina'],
+      ['warmup', 'Entrada'],
+      ['methods', 'Metodos'],
+      ['stats', 'Stats'],
+      ['data', 'Datos']
+    ];
+    const DAYS = ['Dia 1', 'Dia 2', 'Dia 3'];
+    const WEEKS = ['w1', 'w2', 'w3', 'w4'];
+    const WEEK_LABELS = ['Sem 1', 'Sem 2', 'Sem 3', 'Sem 4'];
+
+    let db = loadDb();
+    let ui = {
+      tab: 'routine',
+      day: 'Dia 1',
+      statExercise: '',
+      pendingImport: null,
+      expandedMonthPicker: false,
+      helpExerciseKey: ''
+    };
+    let chart = null;
+
+    const app = document.getElementById('app');
+
+    function defaultDb() {
+      return {
+        activeMonth: '',
+        months: {},
+        meta: {
+          createdAt: new Date().toISOString(),
+          version: 1
+        }
+      };
+    }
+
+    function loadDb() {
+      try {
+        const raw = localStorage.getItem(DB_KEY);
+        if (!raw) return defaultDb();
+        const parsed = JSON.parse(raw);
+        return {
+          ...defaultDb(),
+          ...parsed,
+          months: parsed.months || {}
+        };
+      } catch {
+        return defaultDb();
+      }
+    }
+
+    function saveDb() {
+      localStorage.setItem(DB_KEY, JSON.stringify(db));
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function slug(value) {
+      return String(value || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/(^-|-$)/g, '');
+    }
+
+    function cell(row, index) {
+      return String(row?.[index] ?? '').trim();
+    }
+
+    function isSem(value) {
+      return /sem\s*1/i.test(String(value || ''));
+    }
+
+    function isRoutineSheet(name) {
+      const n = String(name || '').toLowerCase();
+      return !n.includes('entrada') && !n.includes('metodo') && !n.includes('método');
+    }
+
+    function month() {
+      return db.months[db.activeMonth] || null;
+    }
+
+    function ensureActiveMonth() {
+      const names = Object.keys(db.months);
+      if (!db.activeMonth && names.length) db.activeMonth = names[names.length - 1];
+      if (db.activeMonth && !db.months[db.activeMonth] && names.length) db.activeMonth = names[names.length - 1];
+    }
+
+    function normalizeLog(log) {
+      return {
+        kg: log?.kg ?? '',
+        reps: log?.reps ?? '',
+        rir: log?.rir ?? '',
+        rpe: log?.rpe ?? '',
+        notes: log?.notes ?? ''
+      };
+    }
+
+    function getExerciseKey(exercise) {
+      return exercise.key || slug(exercise.name);
+    }
+
+    function normalizeText(value) {
+      return String(value || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+    }
+
+    const EXERCISE_GUIDES = [
+      {
+        match: ['sentadilla hack'],
+        title: 'Sentadilla hack',
+        setup: 'Apoya bien la espalda, pies firmes sobre la plataforma y rodillas alineadas con la punta de los pies.',
+        execution: 'Baja controlado hasta una profundidad comoda sin despegar la pelvis. Empuja la plataforma con todo el pie y evita bloquear agresivamente las rodillas arriba.',
+        watch: 'No dejes que las rodillas colapsen hacia adentro. Mantene abdomen firme y no rebotes abajo.'
+      },
+      {
+        match: ['sentadilla copa', 'goblet'],
+        title: 'Sentadilla copa',
+        setup: 'Sostene la mancuerna o disco pegado al pecho, pies firmes y torso alto.',
+        execution: 'Baja llevando rodillas hacia afuera y manteniendo el peso cerca del cuerpo. Subi empujando el piso sin perder postura.',
+        watch: 'Evita redondear la espalda o que los talones se despeguen.'
+      },
+      {
+        match: ['sentadilla'],
+        title: 'Sentadilla',
+        setup: 'Pies firmes, abdomen activo y mirada al frente o levemente abajo.',
+        execution: 'Baja de forma controlada manteniendo rodillas alineadas. Subi empujando el piso y sosteniendo el torso estable.',
+        watch: 'No rebotes ni pierdas control lumbar.'
+      },
+      {
+        match: ['remo al frente', 'remo 1b', 'remo'],
+        title: 'Remo',
+        setup: 'Coloca el torso estable, hombros lejos de las orejas y agarre firme.',
+        execution: 'Tira llevando el codo hacia atras, junta suavemente escapulas y controla la vuelta sin soltar el peso.',
+        watch: 'Evita impulsarte con el tronco o encoger hombros.'
+      },
+      {
+        match: ['press plano'],
+        title: 'Press plano',
+        setup: 'Apoya pies, gluteos y espalda en el banco. Junta escapulas y mantenelas estables.',
+        execution: 'Baja la barra o mancuernas con control hacia la zona media del pecho y empuja sin perder la posicion de hombros.',
+        watch: 'No rebotes en el pecho ni abras los codos en exceso.'
+      },
+      {
+        match: ['press hombro'],
+        title: 'Press de hombro',
+        setup: 'Tronco firme, gluteos activos y munecas alineadas.',
+        execution: 'Empuja la carga hacia arriba en linea estable y baja con control hasta un rango comodo.',
+        watch: 'No arquees la zona lumbar para compensar.'
+      },
+      {
+        match: ['prensa'],
+        title: 'Prensa',
+        setup: 'Apoya espalda y pelvis. Ubica los pies segun el foco indicado por el entrenador.',
+        execution: 'Baja controlado sin despegar la pelvis y empuja la plataforma con todo el pie.',
+        watch: 'No bloquees fuerte las rodillas ni acortes el recorrido sin motivo.'
+      },
+      {
+        match: ['peso muerto rumano'],
+        title: 'Peso muerto rumano',
+        setup: 'Pies firmes, barra cerca del cuerpo, rodillas apenas flexionadas y espalda neutra.',
+        execution: 'Lleva la cadera hacia atras, baja la carga pegada a las piernas y subi contrayendo gluteos e isquios.',
+        watch: 'No conviertas el movimiento en sentadilla. Evita redondear la espalda.'
+      },
+      {
+        match: ['curl femoral'],
+        title: 'Curl femoral',
+        setup: 'Ajusta la maquina para que la rodilla quede alineada con el eje y la almohadilla apoye bien.',
+        execution: 'Flexiona rodillas controlando la carga y volve lento sin perder tension.',
+        watch: 'No levantes la cadera ni uses impulso.'
+      },
+      {
+        match: ['cuadricera', 'extension'],
+        title: 'Extension de cuadriceps',
+        setup: 'Alinea la rodilla con el eje de la maquina y fija bien la espalda.',
+        execution: 'Extende con control, apreta arriba sin golpear la articulacion y baja lento.',
+        watch: 'Evita balancearte o despegar la cadera.'
+      },
+      {
+        match: ['biceps supino', 'biceps barra', 'biceps martillo', 'biceps'],
+        title: 'Curl de biceps',
+        setup: 'Hombros bajos, codos cerca del cuerpo y tronco estable.',
+        execution: 'Flexiona el codo sin adelantarlo de mas y baja controlado hasta extender casi completo.',
+        watch: 'No uses balanceo de espalda ni acortes la bajada.'
+      },
+      {
+        match: ['triceps frances'],
+        title: 'Triceps frances',
+        setup: 'Codos orientados al frente, hombros estables y carga controlada.',
+        execution: 'Flexiona codos bajando la carga y extendelos sin separar demasiado los brazos.',
+        watch: 'No dejes que los codos se abran ni fuerces el hombro.'
+      },
+      {
+        match: ['triceps polea'],
+        title: 'Triceps en polea',
+        setup: 'Codos pegados al cuerpo, hombros abajo y tronco firme.',
+        execution: 'Extende los codos hasta contraer triceps y volve controlado sin mover los hombros.',
+        watch: 'Evita inclinarte o empujar con todo el cuerpo.'
+      },
+      {
+        match: ['vuelos laterales', 'vuelos lalerales'],
+        title: 'Vuelos laterales',
+        setup: 'Mancuernas a los costados, codos apenas flexionados y hombros lejos de las orejas.',
+        execution: 'Eleva los brazos hacia los lados hasta un rango comodo y baja lento manteniendo tension.',
+        watch: 'No subas con trapecio ni uses envion.'
+      },
+      {
+        match: ['cruce polea'],
+        title: 'Cruce en polea',
+        setup: 'Coloca el banco o postura indicada, pecho alto y hombros estables.',
+        execution: 'Acerca las manos controlando la contraccion del pecho y regresa lento sin perder tension.',
+        watch: 'No transformes el movimiento en press ni cierres con impulso.'
+      },
+      {
+        match: ['puente pelota', 'puente gluteo', 'puente'],
+        title: 'Puente',
+        setup: 'Apoya pies o pelota segun corresponda, abdomen activo y pelvis neutra.',
+        execution: 'Eleva la cadera contrayendo gluteos y controla la bajada sin perder alineacion.',
+        watch: 'No hiperextiendas la zona lumbar arriba.'
+      },
+      {
+        match: ['pall'],
+        title: 'Pallof press',
+        setup: 'Ubicate de costado a la polea o banda, pies firmes y abdomen activo.',
+        execution: 'Empuja las manos al frente resistiendo la rotacion y volve controlado.',
+        watch: 'No gires el torso ni pierdas la posicion de cadera.'
+      }
+    ];
+
+    const NOTATION_GUIDES = [
+      ['8rm', '8RM: carga maxima aproximada con la que podrias hacer 8 repeticiones tecnicas.'],
+      ['5rm', '5RM: carga maxima aproximada para 5 repeticiones tecnicas.'],
+      ['rir', 'RIR: repeticiones en reserva. RIR 2 significa terminar sintiendo que quedaban unas 2 reps posibles.'],
+      ['r.p.e', 'RPE: esfuerzo percibido de 1 a 10. RPE 10 equivale a esfuerzo maximo sin reps en reserva.'],
+      ['rpe', 'RPE: esfuerzo percibido de 1 a 10. RPE 10 equivale a esfuerzo maximo sin reps en reserva.'],
+      ['dpc', 'DPC: doble progresion de carga. Primero intenta subir repeticiones dentro del rango; cuando llegas al techo con buena tecnica, subi carga.'],
+      ['rest pause', 'Rest pause: serie exigente, micro pausa corta y nuevas reps hasta acercarte al fallo tecnico.'],
+      ['drop', 'Drop set: al terminar una serie pesada, bajas carga y seguis con poco o nada de descanso.'],
+      ['fst-7', 'FST-7: siete series con descansos cortos para acumular volumen y congestion local.'],
+      ['biserie', 'Biserie: dos ejercicios seguidos con descanso al terminar ambos.'],
+      ['bi.x3', 'BI.x3: biserie repetida 3 rondas.'],
+      ['fallo', 'Fallo: punto donde no podes completar otra repeticion con tecnica aceptable.'],
+      ['excentrica', 'Excentrica controlada: la fase de bajada debe hacerse lenta y con control.'],
+      ['-20%', '-20%: reducir aproximadamente 20 por ciento la carga respecto de la serie pesada indicada.'],
+      ['-carga', '-Carga: reducir peso para sostener tecnica o completar el rango indicado.'],
+      ['+(-20%)', '+(-20%): despues de la serie principal, bajar cerca de 20 por ciento la carga y completar el trabajo indicado.']
+    ];
+
+    function findExerciseGuide(exerciseName) {
+      const normalized = normalizeText(exerciseName);
+      return EXERCISE_GUIDES.find((guide) => guide.match.some((needle) => normalized.includes(needle)));
+    }
+
+    function explainPrescription(exercise) {
+      const text = normalizeText([
+        exercise.s1,
+        exercise.s2,
+        exercise.s3,
+        exercise.s4,
+        exercise.pause
+      ].filter(Boolean).join(' '));
+      const explanations = [];
+
+      NOTATION_GUIDES.forEach(([needle, explanation]) => {
+        if (text.includes(normalizeText(needle)) && !explanations.includes(explanation)) {
+          explanations.push(explanation);
+        }
+      });
+
+      const setPatterns = [
+        ...String(text).matchAll(/(\d+)\s*x\s*(\d+)(?:\s*a\s*(\d+))?/g)
+      ];
+      setPatterns.forEach((match) => {
+        const [, sets, reps, toReps] = match;
+        explanations.push(`${sets}x${reps}${toReps ? ` a ${toReps}` : ''}: ${sets} serie${sets === '1' ? '' : 's'} de ${reps}${toReps ? ` a ${toReps}` : ''} repeticion${reps === '1' && !toReps ? '' : 'es'}.`);
+      });
+
+      if (/\d+\s*a\s*\d+/.test(text)) {
+        explanations.push('Rango de repeticiones: elegi una carga que te permita quedar dentro del rango con buena tecnica.');
+      }
+
+      if (exercise.pause) {
+        explanations.push(`Pausa ${exercise.pause}: descanso indicado entre series o entre rondas, segun el metodo del ejercicio.`);
+      }
+
+      return [...new Set(explanations)];
+    }
+
+    function buildExerciseHelp(exercise) {
+      const guide = findExerciseGuide(exercise.name);
+      const prescription = explainPrescription(exercise);
+      return {
+        title: guide?.title || exercise.name,
+        setup: guide?.setup || 'No hay una guia especifica para este ejercicio todavia. Usa la indicacion del entrenador como referencia principal.',
+        execution: guide?.execution || 'Trabaja con rango controlado, postura estable y tecnica consistente en todas las repeticiones.',
+        watch: guide?.watch || 'Si aparece dolor articular, perdida marcada de tecnica o duda con la ejecucion, conviene consultarlo con el entrenador.',
+        prescription
+      };
+    }
+
+    function findExerciseByKey(key) {
+      return activeExercises().find((exercise) => getExerciseKey(exercise) === key) || allExercises().find((exercise) => getExerciseKey(exercise) === key);
+    }
+
+    function getLog(exercise, weekKey) {
+      const current = month();
+      if (!current) return normalizeLog();
+      const key = getExerciseKey(exercise);
+      current.logs ||= {};
+      current.logs[key] ||= {};
+      current.logs[key][weekKey] = normalizeLog(current.logs[key][weekKey]);
+      return current.logs[key][weekKey];
+    }
+
+    function updateLog(exerciseKey, weekKey, field, value) {
+      const current = month();
+      if (!current) return;
+      current.logs ||= {};
+      current.logs[exerciseKey] ||= {};
+      current.logs[exerciseKey][weekKey] = normalizeLog(current.logs[exerciseKey][weekKey]);
+      current.logs[exerciseKey][weekKey][field] = value;
+      saveDb();
+      renderStatsSoft();
+    }
+
+    function parseRoutineSheet(rows, sheetName) {
+      const routine = [];
+      let dayIndex = 0;
+      let currentDay = '';
+      let currentGroup = '';
+
+      rows.forEach((row) => {
+        const name = cell(row, 0);
+        const s1 = cell(row, 3);
+        const s2 = cell(row, 4);
+        const s3 = cell(row, 5);
+        const s4 = cell(row, 6);
+        const pause = cell(row, 7);
+
+        if (!name && !s1 && !s2 && !s3 && !s4 && !pause) return;
+
+        const headerLike = name && isSem(s1) && /sem\s*2/i.test(s2);
+        if (headerLike) {
+          dayIndex += 1;
+          currentDay = `Dia ${Math.min(dayIndex, 3)}`;
+          currentGroup = name;
+          return;
+        }
+
+        if (!currentDay || !name) return;
+        if (!s1 && !s2 && !s3 && !s4 && !pause) return;
+
+        const keyBase = `${currentDay}-${name}-${routine.length + 1}`;
+        routine.push({
+          key: slug(keyBase),
+          day: currentDay,
+          group: currentGroup,
+          name,
+          s1,
+          s2,
+          s3,
+          s4,
+          pause,
+          sourceSheet: sheetName
+        });
+      });
+
+      return routine;
+    }
+
+    function parseWarmupSheet(rows) {
+      const warmup = [];
+      let currentDay = '';
+
+      rows.forEach((row) => {
+        const first = cell(row, 0);
+        const extra = [cell(row, 1), cell(row, 2), cell(row, 3), cell(row, 4)].filter(Boolean).join(' ');
+        if (!first && !extra) return;
+
+        if (/entrada\s+en\s+calor/i.test(first)) {
+          currentDay = first.replace(/entrada\s+en\s+calor/i, '').trim() || 'General';
+          return;
+        }
+
+        warmup.push({
+          day: currentDay || 'General',
+          name: first,
+          info: extra
+        });
+      });
+
+      return warmup;
+    }
+
+    function parseMethodsSheet(rows) {
+      const methods = [];
+      let current = null;
+
+      rows.forEach((row) => {
+        const title = cell(row, 0);
+        const text = [cell(row, 2), cell(row, 3), cell(row, 4), cell(row, 5)].filter(Boolean).join(' ');
+        if (title && text) {
+          current = { title, text };
+          methods.push(current);
+          return;
+        }
+        if (title && !text) {
+          current = { title, text: '' };
+          methods.push(current);
+          return;
+        }
+        if (current && text) {
+          current.text = [current.text, text].filter(Boolean).join(' ');
+        }
+      });
+
+      return methods.filter((item) => item.title && item.text);
+    }
+
+    function buildImportedMonth(workbook, routineSheetName) {
+      const routineSheet = workbook.Sheets[routineSheetName];
+      const rows = XLSX.utils.sheet_to_json(routineSheet, { header: 1, defval: '' });
+
+      const warmupName = workbook.SheetNames.find((name) => /entrada/i.test(name));
+      const methodsName = workbook.SheetNames.find((name) => /metodo|método/i.test(name));
+
+      const warmupRows = warmupName ? XLSX.utils.sheet_to_json(workbook.Sheets[warmupName], { header: 1, defval: '' }) : [];
+      const methodRows = methodsName ? XLSX.utils.sheet_to_json(workbook.Sheets[methodsName], { header: 1, defval: '' }) : [];
+
+      return {
+        routine: parseRoutineSheet(rows, routineSheetName),
+        warmup: parseWarmupSheet(warmupRows),
+        methods: parseMethodsSheet(methodRows),
+        logs: {},
+        importedAt: new Date().toISOString(),
+        sourceSheet: routineSheetName
+      };
+    }
+
+    function readExcel(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          try {
+            const data = new Uint8Array(event.target.result);
+            resolve(XLSX.read(data, { type: 'array' }));
+          } catch (error) {
+            reject(error);
+          }
+        };
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(file);
+      });
+    }
+
+    function groupedRoutine(current, dayName) {
+      const items = (current?.routine || []).filter((item) => item.day === dayName);
+      const groups = [];
+      items.forEach((item) => {
+        const title = item.group || dayName;
+        let group = groups.find((entry) => entry.title === title);
+        if (!group) {
+          group = { title, items: [] };
+          groups.push(group);
+        }
+        group.items.push(item);
+      });
+      return groups;
+    }
+
+    function allExercises() {
+      return Object.values(db.months).flatMap((m) => m.routine || []);
+    }
+
+    function activeExercises() {
+      return month()?.routine || [];
+    }
+
+    function metricRows(exerciseName) {
+      const rows = [];
+      Object.entries(db.months).forEach(([monthName, data]) => {
+        (data.routine || [])
+          .filter((exercise) => exercise.name === exerciseName)
+          .forEach((exercise) => {
+            const key = getExerciseKey(exercise);
+            WEEKS.forEach((week, index) => {
+              const log = normalizeLog(data.logs?.[key]?.[week]);
+              const kg = Number(log.kg);
+              const reps = Number(log.reps);
+              const rir = Number(log.rir);
+              const rpe = Number(log.rpe);
+              if (kg || reps || rir || rpe) {
+                rows.push({
+                  label: `${monthName} S${index + 1}`,
+                  monthName,
+                  week,
+                  kg: Number.isFinite(kg) ? kg : 0,
+                  reps: Number.isFinite(reps) ? reps : 0,
+                  rir: Number.isFinite(rir) ? rir : null,
+                  rpe: Number.isFinite(rpe) ? rpe : null,
+                  volume: Number.isFinite(kg) && Number.isFinite(reps) ? kg * reps : 0,
+                  e1rm: Number.isFinite(kg) && Number.isFinite(reps) && kg > 0 && reps > 0 ? kg * (1 + reps / 30) : 0
+                });
+              }
+            });
+          });
+      });
+      return rows;
+    }
+
+    function trendLabel(values) {
+      const filtered = values.filter((v) => Number(v) > 0);
+      if (filtered.length < 2) return 'Sin tendencia';
+      const diff = filtered[filtered.length - 1] - filtered[0];
+      if (diff > 0) return `Subio ${formatNumber(diff)}`;
+      if (diff < 0) return `Bajo ${formatNumber(Math.abs(diff))}`;
+      return 'Se mantuvo';
+    }
+
+    function formatNumber(value) {
+      if (!Number.isFinite(Number(value))) return '-';
+      return Number(value).toLocaleString('es-AR', { maximumFractionDigits: 1 });
+    }
+
+    function render() {
+      ensureActiveMonth();
+      const current = month();
+      app.innerHTML = `
+        <header class="sticky top-0 z-30 border-b border-white/10 bg-ink/90 px-4 pb-3 pt-4 backdrop-blur">
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-[.18em] text-limefire">Ficha local</p>
+              <h1 class="mt-1 text-2xl font-black tracking-tight">Entrenamiento</h1>
+            </div>
+            <button class="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-left text-sm text-slate-200" data-action="toggle-months">
+              <span class="block text-[11px] uppercase text-slate-400">Mes activo</span>
+              <span class="font-semibold">${escapeHtml(db.activeMonth || 'Sin mes')}</span>
+            </button>
+          </div>
+          ${renderMonthPicker()}
+          <nav class="no-scrollbar mt-4 flex gap-2 overflow-x-auto">
+            ${TABS.map(([id, label]) => `
+              <button class="shrink-0 rounded-lg px-3 py-2 text-sm font-semibold ${ui.tab === id ? 'bg-limefire text-slate-950' : 'bg-white/5 text-slate-300'}" data-tab="${id}">
+                ${label}
+              </button>
+            `).join('')}
+          </nav>
+        </header>
+
+        <main class="flex-1 px-4 py-4 safe-bottom">
+          ${!current && ui.tab !== 'data' ? renderEmptyState() : renderTab(current)}
+        </main>
+        ${renderHelpModal()}
+      `;
+
+      bindEvents();
+      renderStatsSoft();
+    }
+
+    function renderMonthPicker() {
+      const names = Object.keys(db.months);
+      if (!ui.expandedMonthPicker || !names.length) return '';
+      return `
+        <div class="mt-3 rounded-lg border border-white/10 bg-panel p-2">
+          ${names.map((name) => `
+            <button class="flex w-full items-center justify-between rounded-md px-3 py-2 text-left text-sm ${name === db.activeMonth ? 'bg-limefire/15 text-limefire' : 'text-slate-200'}" data-month="${escapeHtml(name)}">
+              <span>${escapeHtml(name)}</span>
+              <span class="text-xs text-slate-400">${db.months[name].routine?.length || 0} ejercicios</span>
+            </button>
+          `).join('')}
+        </div>
+      `;
+    }
+
+    function renderEmptyState() {
+      return `
+        <section class="rounded-lg border border-white/10 bg-panel p-5 shadow-glow">
+          <h2 class="text-xl font-bold">Carguemos la primera rutina</h2>
+          <p class="mt-2 text-sm leading-6 text-slate-300">Importa el Excel del entrenador desde la pestana Datos. La app va a guardar todo en este celular y despues vas a poder exportar un backup JSON.</p>
+          <button class="mt-4 rounded-lg bg-limefire px-4 py-3 font-bold text-slate-950" data-tab="data">Ir a Datos</button>
+        </section>
+      `;
+    }
+
+    function renderTab(current) {
+      if (ui.tab === 'routine') return renderRoutine(current);
+      if (ui.tab === 'warmup') return renderWarmup(current);
+      if (ui.tab === 'methods') return renderMethods(current);
+      if (ui.tab === 'stats') return renderStats(current);
+      return renderData(current);
+    }
+
+    function renderRoutine(current) {
+      return `
+        <section>
+          <div class="grid grid-cols-3 gap-2">
+            ${DAYS.map((day) => `
+              <button class="rounded-lg px-3 py-3 text-sm font-black ${ui.day === day ? 'bg-limefire text-slate-950' : 'bg-white/5 text-slate-200'}" data-day="${day}">
+                ${day.replace('Dia ', 'D')}
+              </button>
+            `).join('')}
+          </div>
+          <div class="mt-4 space-y-4">
+            ${groupedRoutine(current, ui.day).map(renderGroup).join('') || renderNoItems('No hay ejercicios para este dia.')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderGroup(group) {
+      return `
+        <section class="rounded-lg border border-white/10 bg-panel p-3 shadow-glow">
+          <h2 class="px-1 pb-2 text-sm font-black uppercase tracking-wide text-slate-300">${escapeHtml(group.title)}</h2>
+          <div class="space-y-3">
+            ${group.items.map(renderExercise).join('')}
+          </div>
+        </section>
+      `;
+    }
+
+    function renderExercise(exercise) {
+      const key = getExerciseKey(exercise);
+      return `
+        <details class="rounded-lg border border-white/10 bg-panel2">
+          <summary class="flex cursor-pointer items-center justify-between gap-3 p-3">
+            <div class="min-w-0">
+              <h3 class="text-base font-bold leading-snug">${escapeHtml(exercise.name)}</h3>
+              <p class="mt-1 text-xs text-slate-400">${escapeHtml([exercise.s1, exercise.pause && `Pausa ${exercise.pause}`].filter(Boolean).join(' | '))}</p>
+            </div>
+            <span class="flex shrink-0 items-center gap-2">
+              <button class="grid h-8 w-8 place-items-center rounded-full border border-limefire/40 bg-limefire/10 text-sm font-black text-limefire" type="button" title="Ver explicacion" data-help="${key}">?</button>
+              <span class="rounded-md bg-white/5 px-2 py-1 text-xs font-bold text-limefire">abrir</span>
+            </span>
+          </summary>
+          <div class="border-t border-white/10 p-3">
+            <div class="grid grid-cols-2 gap-2 text-xs text-slate-300">
+              ${WEEK_LABELS.map((label, index) => `
+                <div class="rounded-md bg-black/20 p-2">
+                  <span class="block font-semibold text-slate-400">${label}</span>
+                  <span>${escapeHtml(exercise[WEEKS[index]] || '-')}</span>
+                </div>
+              `).join('')}
+              <div class="rounded-md bg-black/20 p-2">
+                <span class="block font-semibold text-slate-400">Pausa</span>
+                <span>${escapeHtml(exercise.pause || '-')}</span>
+              </div>
+            </div>
+            <div class="mt-3 space-y-3">
+              ${WEEKS.map((week, index) => renderWeekForm(exercise, key, week, index)).join('')}
+            </div>
+          </div>
+        </details>
+      `;
+    }
+
+    function renderWeekForm(exercise, key, week, index) {
+      const log = getLog(exercise, week);
+      return `
+        <details class="rounded-lg bg-black/20">
+          <summary class="flex cursor-pointer items-center justify-between px-3 py-3 text-sm font-bold">
+            <span>${WEEK_LABELS[index]}</span>
+            <span class="text-xs text-slate-400">${log.kg || '-'} kg / ${log.reps || '-'} reps</span>
+          </summary>
+          <div class="grid grid-cols-2 gap-2 border-t border-white/10 p-3">
+            ${inputField('kg', 'Kg', log.kg, key, week, 'number', '0.5')}
+            ${inputField('reps', 'Reps', log.reps, key, week, 'number', '1')}
+            ${inputField('rir', 'RIR', log.rir, key, week, 'number', '1')}
+            ${inputField('rpe', 'RPE', log.rpe, key, week, 'number', '0.5')}
+            <label class="col-span-2 text-xs font-semibold uppercase text-slate-400">
+              Nota
+              <textarea class="mt-1 min-h-20 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-2 text-sm normal-case text-slate-100 outline-none focus:border-limefire" data-log-field="notes" data-exercise="${key}" data-week="${week}" placeholder="Sensaciones, tecnica, dolor, ajuste...">${escapeHtml(log.notes)}</textarea>
+            </label>
+          </div>
+        </details>
+      `;
+    }
+
+    function inputField(field, label, value, key, week, type, step) {
+      return `
+        <label class="text-xs font-semibold uppercase text-slate-400">
+          ${label}
+          <input class="mt-1 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-3 text-base text-slate-100 outline-none focus:border-limefire" type="${type}" step="${step}" inputmode="decimal" value="${escapeHtml(value)}" data-log-field="${field}" data-exercise="${key}" data-week="${week}">
+        </label>
+      `;
+    }
+
+    function renderWarmup(current) {
+      const groups = [];
+      (current.warmup || []).forEach((item) => {
+        let group = groups.find((entry) => entry.day === item.day);
+        if (!group) {
+          group = { day: item.day, items: [] };
+          groups.push(group);
+        }
+        group.items.push(item);
+      });
+
+      return `
+        <section class="space-y-3">
+          ${groups.map((group) => `
+            <div class="rounded-lg border border-white/10 bg-panel p-4">
+              <h2 class="text-sm font-black uppercase text-limefire">${escapeHtml(group.day)}</h2>
+              <div class="mt-3 space-y-2">
+                ${group.items.map((item) => `
+                  <div class="rounded-lg bg-white/5 p-3">
+                    <p class="font-semibold">${escapeHtml(item.name)}</p>
+                    ${item.info ? `<p class="mt-1 text-sm text-slate-400">${escapeHtml(item.info)}</p>` : ''}
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          `).join('') || renderNoItems('No hay entrada en calor importada.')}
+        </section>
+      `;
+    }
+
+    function renderMethods(current) {
+      return `
+        <section class="space-y-3">
+          ${(current.methods || []).map((method) => `
+            <details class="rounded-lg border border-white/10 bg-panel">
+              <summary class="cursor-pointer p-4 font-black">${escapeHtml(method.title)}</summary>
+              <p class="border-t border-white/10 p-4 text-sm leading-6 text-slate-300">${escapeHtml(method.text)}</p>
+            </details>
+          `).join('') || renderNoItems('No hay metodos importados.')}
+        </section>
+      `;
+    }
+
+    function renderStats(current) {
+      const exerciseNames = [...new Set(allExercises().map((exercise) => exercise.name))].sort();
+      if (!ui.statExercise || !exerciseNames.includes(ui.statExercise)) {
+        ui.statExercise = exerciseNames[0] || '';
+      }
+      const rows = metricRows(ui.statExercise);
+      const bestKg = Math.max(0, ...rows.map((row) => row.kg));
+      const bestReps = Math.max(0, ...rows.map((row) => row.reps));
+      const bestVolume = Math.max(0, ...rows.map((row) => row.volume));
+      const bestE1rm = Math.max(0, ...rows.map((row) => row.e1rm));
+
+      return `
+        <section class="space-y-4">
+          <div class="rounded-lg border border-white/10 bg-panel p-4">
+            <label class="text-xs font-semibold uppercase text-slate-400">
+              Ejercicio
+              <select class="mt-2 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-3 text-base text-slate-100 outline-none focus:border-limefire" data-stat-select>
+                ${exerciseNames.map((name) => `<option ${name === ui.statExercise ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+              </select>
+            </label>
+          </div>
+          <div class="grid grid-cols-2 gap-3">
+            ${statCard('Mejor kg', `${formatNumber(bestKg)} kg`, trendLabel(rows.map((r) => r.kg)))}
+            ${statCard('Mejores reps', formatNumber(bestReps), trendLabel(rows.map((r) => r.reps)))}
+            ${statCard('Volumen', formatNumber(bestVolume), 'kg x reps')}
+            ${statCard('1RM estimado', `${formatNumber(bestE1rm)} kg`, 'formula Epley')}
+          </div>
+          <div class="rounded-lg border border-white/10 bg-panel p-4">
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="font-black">Evolucion</h2>
+              <span class="text-xs text-slate-400">kg, reps, volumen</span>
+            </div>
+            <canvas id="progressChart" height="240"></canvas>
+          </div>
+          <div class="rounded-lg border border-white/10 bg-panel p-4">
+            <h2 class="font-black">Lectura rapida</h2>
+            <p class="mt-2 text-sm leading-6 text-slate-300">El volumen es kg por repeticiones. El 1RM es una estimacion orientativa: sirve para comparar tendencia, no para reemplazar un test real.</p>
+          </div>
+        </section>
+      `;
+    }
+
+    function statCard(title, value, help) {
+      return `
+        <div class="rounded-lg border border-white/10 bg-panel p-4">
+          <p class="text-xs font-semibold uppercase text-slate-400">${title}</p>
+          <p class="mt-1 text-2xl font-black">${value}</p>
+          <p class="mt-1 text-xs text-limefire">${help}</p>
+        </div>
+      `;
+    }
+
+    function renderStatsSoft() {
+      if (ui.tab !== 'stats') return;
+      const canvas = document.getElementById('progressChart');
+      if (!canvas || !window.Chart) return;
+      const rows = metricRows(ui.statExercise);
+      if (chart) chart.destroy();
+      chart = new Chart(canvas, {
+        type: 'line',
+        data: {
+          labels: rows.map((row) => row.label),
+          datasets: [
+            {
+              label: 'Kg',
+              data: rows.map((row) => row.kg),
+              borderColor: '#a3e635',
+              backgroundColor: 'rgba(163,230,53,.12)',
+              tension: .3
+            },
+            {
+              label: 'Reps',
+              data: rows.map((row) => row.reps),
+              borderColor: '#38bdf8',
+              backgroundColor: 'rgba(56,189,248,.12)',
+              tension: .3
+            },
+            {
+              label: 'Volumen',
+              data: rows.map((row) => row.volume),
+              borderColor: '#f97316',
+              backgroundColor: 'rgba(249,115,22,.12)',
+              tension: .3,
+              yAxisID: 'y1'
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: '#cbd5e1' } } },
+          scales: {
+            x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,.12)' } },
+            y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(148,163,184,.12)' } },
+            y1: { position: 'right', ticks: { color: '#94a3b8' }, grid: { drawOnChartArea: false } }
+          }
+        }
+      });
+    }
+
+    function renderData(current) {
+      const pending = ui.pendingImport;
+      return `
+        <section class="space-y-4">
+          <div class="rounded-lg border border-white/10 bg-panel p-4">
+            <h2 class="text-lg font-black">Importar Excel</h2>
+            <p class="mt-2 text-sm leading-6 text-slate-300">Carga el archivo del entrenador, elegi la hoja de rutina y escribi el mes antes de guardar.</p>
+            <input class="mt-4 block w-full rounded-lg border border-white/10 bg-slate-950 p-3 text-sm" type="file" accept=".xlsx,.xls" data-excel-input>
+          </div>
+
+          ${pending ? renderPendingImport(pending) : ''}
+
+          <div class="rounded-lg border border-white/10 bg-panel p-4">
+            <h2 class="text-lg font-black">Backup</h2>
+            <div class="mt-4 grid grid-cols-2 gap-3">
+              <button class="rounded-lg bg-limefire px-4 py-3 font-black text-slate-950" data-action="export-backup">Exportar</button>
+              <label class="rounded-lg bg-white/5 px-4 py-3 text-center font-black text-slate-100">
+                Importar
+                <input class="hidden" type="file" accept=".json,application/json" data-backup-input>
+              </label>
+            </div>
+            <p class="mt-3 text-xs leading-5 text-slate-400">Si cambias de celular, exporta este backup e importalo en el nuevo dispositivo.</p>
+          </div>
+
+          <div class="rounded-lg border border-white/10 bg-panel p-4">
+            <h2 class="text-lg font-black">Deploy</h2>
+            <p class="mt-2 text-sm leading-6 text-slate-300">Esta app es estatica y esta lista para Vercel. Los datos se guardan en el navegador donde la uses.</p>
+          </div>
+        </section>
+      `;
+    }
+
+    function renderPendingImport(pending) {
+      const preview = pending.preview;
+      return `
+        <div class="rounded-lg border border-limefire/30 bg-limefire/10 p-4">
+          <h2 class="text-lg font-black text-limefire">Previsualizacion</h2>
+          <label class="mt-3 block text-xs font-semibold uppercase text-slate-300">
+            Mes
+            <input class="mt-1 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-3 text-base normal-case text-slate-100 outline-none focus:border-limefire" placeholder="Ej: Mayo 2026" value="${escapeHtml(pending.monthName)}" data-import-month>
+          </label>
+          <label class="mt-3 block text-xs font-semibold uppercase text-slate-300">
+            Hoja de rutina
+            <select class="mt-1 w-full rounded-lg border border-white/10 bg-slate-950 px-3 py-3 text-base normal-case text-slate-100 outline-none focus:border-limefire" data-routine-sheet>
+              ${pending.routineSheets.map((name) => `<option ${name === pending.routineSheetName ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
+            </select>
+          </label>
+          <div class="mt-4 grid grid-cols-3 gap-2 text-center">
+            <div class="rounded-lg bg-black/20 p-3">
+              <p class="text-xl font-black">${preview.routine.length}</p>
+              <p class="text-xs text-slate-400">Ejercicios</p>
+            </div>
+            <div class="rounded-lg bg-black/20 p-3">
+              <p class="text-xl font-black">${preview.warmup.length}</p>
+              <p class="text-xs text-slate-400">Entrada</p>
+            </div>
+            <div class="rounded-lg bg-black/20 p-3">
+              <p class="text-xl font-black">${preview.methods.length}</p>
+              <p class="text-xs text-slate-400">Metodos</p>
+            </div>
+          </div>
+          <div class="mt-4 max-h-48 overflow-y-auto rounded-lg bg-black/20 p-3 text-sm">
+            ${preview.routine.slice(0, 8).map((item) => `<p class="py-1"><b>${escapeHtml(item.day)}</b> ${escapeHtml(item.name)}</p>`).join('') || '<p>No se detectaron ejercicios.</p>'}
+          </div>
+          <div class="mt-4 grid grid-cols-2 gap-3">
+            <button class="rounded-lg bg-white/10 px-4 py-3 font-black text-slate-100" data-action="cancel-import">Cancelar</button>
+            <button class="rounded-lg bg-limefire px-4 py-3 font-black text-slate-950" data-action="confirm-import">Guardar mes</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderNoItems(message) {
+      return `
+        <div class="rounded-lg border border-white/10 bg-panel p-5 text-sm leading-6 text-slate-300">
+          ${message}
+        </div>
+      `;
+    }
+
+    function renderHelpModal() {
+      if (!ui.helpExerciseKey) return '';
+      const exercise = findExerciseByKey(ui.helpExerciseKey);
+      if (!exercise) return '';
+      const help = buildExerciseHelp(exercise);
+      const rawPrescription = [exercise.s1, exercise.s2, exercise.s3, exercise.s4, exercise.pause && `Pausa ${exercise.pause}`].filter(Boolean).join(' | ');
+
+      return `
+        <div class="fixed inset-0 z-50 flex items-end bg-black/70 p-3 backdrop-blur-sm sm:items-center sm:justify-center" data-modal-backdrop>
+          <section class="max-h-[88vh] w-full max-w-2xl overflow-y-auto rounded-t-2xl border border-white/10 bg-panel shadow-glow sm:rounded-2xl">
+            <div class="sticky top-0 flex items-start justify-between gap-3 border-b border-white/10 bg-panel p-4">
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-[.18em] text-limefire">Ayuda tecnica</p>
+                <h2 class="mt-1 text-xl font-black">${escapeHtml(exercise.name)}</h2>
+              </div>
+              <button class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-white/10 text-lg font-black" type="button" data-action="close-help">x</button>
+            </div>
+            <div class="space-y-4 p-4">
+              <div class="rounded-lg bg-black/20 p-3">
+                <h3 class="text-sm font-black uppercase text-slate-300">Indicacion original</h3>
+                <p class="mt-2 text-sm leading-6 text-slate-200">${escapeHtml(rawPrescription || 'Sin indicacion importada.')}</p>
+              </div>
+              <div class="grid gap-3">
+                ${helpBlock('Preparacion', help.setup)}
+                ${helpBlock('Ejecucion', help.execution)}
+                ${helpBlock('Cuidar', help.watch)}
+              </div>
+              <div class="rounded-lg bg-black/20 p-3">
+                <h3 class="text-sm font-black uppercase text-slate-300">Como leer la indicacion</h3>
+                ${help.prescription.length ? `
+                  <ul class="mt-2 space-y-2 text-sm leading-6 text-slate-200">
+                    ${help.prescription.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
+                  </ul>
+                ` : `
+                  <p class="mt-2 text-sm leading-6 text-slate-300">No detecte codigos especiales en esta indicacion. Segui las series, repeticiones y pausas cargadas por el entrenador.</p>
+                `}
+              </div>
+              <p class="text-xs leading-5 text-slate-500">Estas ayudas son una guia general para recordar tecnica y leer abreviaturas. Si una indicacion del entrenador contradice esta ayuda, prioriza lo que te haya explicado el entrenador.</p>
+            </div>
+          </section>
+        </div>
+      `;
+    }
+
+    function helpBlock(title, text) {
+      return `
+        <div class="rounded-lg bg-white/5 p-3">
+          <h3 class="text-sm font-black uppercase text-limefire">${title}</h3>
+          <p class="mt-2 text-sm leading-6 text-slate-200">${escapeHtml(text)}</p>
+        </div>
+      `;
+    }
+
+    function bindEvents() {
+      document.querySelectorAll('[data-tab]').forEach((button) => {
+        button.addEventListener('click', () => {
+          ui.tab = button.dataset.tab;
+          render();
+        });
+      });
+
+      document.querySelectorAll('[data-day]').forEach((button) => {
+        button.addEventListener('click', () => {
+          ui.day = button.dataset.day;
+          render();
+        });
+      });
+
+      document.querySelectorAll('[data-month]').forEach((button) => {
+        button.addEventListener('click', () => {
+          db.activeMonth = button.dataset.month;
+          ui.expandedMonthPicker = false;
+          saveDb();
+          render();
+        });
+      });
+
+      document.querySelectorAll('[data-log-field]').forEach((input) => {
+        input.addEventListener('input', () => {
+          updateLog(input.dataset.exercise, input.dataset.week, input.dataset.logField, input.value);
+        });
+      });
+
+      document.querySelectorAll('[data-help]').forEach((button) => {
+        button.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          ui.helpExerciseKey = button.dataset.help;
+          render();
+        });
+      });
+
+      document.querySelector('[data-modal-backdrop]')?.addEventListener('click', (event) => {
+        if (event.target.matches('[data-modal-backdrop]')) {
+          ui.helpExerciseKey = '';
+          render();
+        }
+      });
+
+      document.querySelector('[data-stat-select]')?.addEventListener('change', (event) => {
+        ui.statExercise = event.target.value;
+        render();
+      });
+
+      document.querySelector('[data-excel-input]')?.addEventListener('change', handleExcel);
+      document.querySelector('[data-backup-input]')?.addEventListener('change', handleBackupImport);
+      document.querySelector('[data-import-month]')?.addEventListener('input', (event) => {
+        ui.pendingImport.monthName = event.target.value;
+      });
+      document.querySelector('[data-routine-sheet]')?.addEventListener('change', (event) => {
+        const pending = ui.pendingImport;
+        pending.routineSheetName = event.target.value;
+        pending.preview = buildImportedMonth(pending.workbook, pending.routineSheetName);
+        render();
+      });
+
+      document.querySelectorAll('[data-action]').forEach((button) => {
+        button.addEventListener('click', () => handleAction(button.dataset.action));
+      });
+    }
+
+    async function handleExcel(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        const workbook = await readExcel(file);
+        const routineSheets = workbook.SheetNames.filter(isRoutineSheet);
+        if (!routineSheets.length) {
+          alert('No se encontro una hoja de rutina en el Excel.');
+          return;
+        }
+        const routineSheetName = routineSheets[routineSheets.length - 1];
+        const preview = buildImportedMonth(workbook, routineSheetName);
+        ui.pendingImport = {
+          workbook,
+          fileName: file.name,
+          monthName: '',
+          routineSheets,
+          routineSheetName,
+          preview
+        };
+        render();
+      } catch (error) {
+        alert(`No pude leer el Excel: ${error.message || error}`);
+      }
+    }
+
+    function handleAction(action) {
+      if (action === 'toggle-months') {
+        ui.expandedMonthPicker = !ui.expandedMonthPicker;
+        render();
+      }
+      if (action === 'cancel-import') {
+        ui.pendingImport = null;
+        render();
+      }
+      if (action === 'close-help') {
+        ui.helpExerciseKey = '';
+        render();
+      }
+      if (action === 'confirm-import') confirmImport();
+      if (action === 'export-backup') exportBackup();
+    }
+
+    function confirmImport() {
+      const pending = ui.pendingImport;
+      if (!pending) return;
+      const monthName = pending.monthName.trim();
+      if (!monthName) {
+        alert('Escribi el nombre del mes antes de guardar.');
+        return;
+      }
+      if (!pending.preview.routine.length) {
+        alert('No se detectaron ejercicios. Revisa la hoja seleccionada.');
+        return;
+      }
+      if (db.months[monthName] && !confirm(`El mes "${monthName}" ya existe. Queres reemplazarlo?`)) {
+        return;
+      }
+      db.months[monthName] = pending.preview;
+      db.months[monthName].sourceFileName = pending.fileName;
+      db.activeMonth = monthName;
+      ui.pendingImport = null;
+      ui.tab = 'routine';
+      saveDb();
+      render();
+    }
+
+    function exportBackup() {
+      const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const stamp = new Date().toISOString().slice(0, 10);
+      link.href = url;
+      link.download = `ficha-entrenamiento-${stamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    async function handleBackupImport(event) {
+      const file = event.target.files?.[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        const parsed = JSON.parse(text);
+        if (!parsed.months || typeof parsed.months !== 'object') {
+          alert('El archivo no parece ser un backup valido.');
+          return;
+        }
+        if (!confirm('Esto reemplazara los datos locales actuales. Continuar?')) return;
+        db = {
+          ...defaultDb(),
+          ...parsed,
+          months: parsed.months || {}
+        };
+        saveDb();
+        render();
+      } catch (error) {
+        alert(`No pude importar el backup: ${error.message || error}`);
+      }
+    }
+
+    function installManifest() {
+      const manifest = {
+        name: 'Ficha de Entrenamiento',
+        short_name: 'Ficha',
+        start_url: '.',
+        display: 'standalone',
+        background_color: '#070b12',
+        theme_color: '#0f172a',
+        icons: []
+      };
+      const blob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+      const link = document.createElement('link');
+      link.rel = 'manifest';
+      link.href = URL.createObjectURL(blob);
+      document.head.appendChild(link);
+    }
+
+    installManifest();
+    render();
+  </script>
+</body>
+</html>
