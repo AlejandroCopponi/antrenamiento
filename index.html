@@ -775,7 +775,7 @@
           <summary class="flex cursor-pointer items-center justify-between gap-3 p-3">
             <div class="min-w-0">
               <h3 class="text-base font-bold leading-snug">${escapeHtml(exercise.name)}</h3>
-              <p class="mt-1 text-xs text-slate-400">${escapeHtml([exercise.s1, exercise.pause && `Pausa ${exercise.pause}`].filter(Boolean).join(' | '))}</p>
+              <p class="mt-1 text-xs text-slate-400">${escapeHtml([exercise.pause && `Pausa ${exercise.pause}`, hasWeeklyPlan(exercise) && 'Plan semanal variable'].filter(Boolean).join(' | '))}</p>
             </div>
             <span class="flex shrink-0 items-center gap-2">
               <button class="grid h-8 w-8 place-items-center rounded-full border border-limefire/40 bg-limefire/10 text-sm font-black text-limefire" type="button" title="Ver explicacion" data-help="${key}">?</button>
@@ -783,17 +783,10 @@
             </span>
           </summary>
           <div class="border-t border-white/10 p-3">
-            <div class="grid grid-cols-2 gap-2 text-xs text-slate-300">
-              ${WEEK_LABELS.map((label, index) => `
-                <div class="rounded-md bg-black/20 p-2">
-                  <span class="block font-semibold text-slate-400">${label}</span>
-                  <span>${escapeHtml(exercise[WEEKS[index]] || '-')}</span>
-                </div>
-              `).join('')}
-              <div class="rounded-md bg-black/20 p-2">
-                <span class="block font-semibold text-slate-400">Pausa</span>
-                <span>${escapeHtml(exercise.pause || '-')}</span>
-              </div>
+            <div class="rounded-lg bg-black/20 p-3 text-sm leading-6 text-slate-300">
+              <span class="font-black text-slate-100">Plan del entrenador:</span>
+              cada semana tiene su consigna al lado del registro editable.
+              ${exercise.pause ? `<span class="block text-xs text-slate-400">Pausa: ${escapeHtml(exercise.pause)}</span>` : ''}
             </div>
             <div class="mt-3 space-y-3">
               ${WEEKS.map((week, index) => renderWeekForm(exercise, key, week, index)).join('')}
@@ -805,13 +798,21 @@
 
     function renderWeekForm(exercise, key, week, index) {
       const log = getLog(exercise, week);
+      const plan = exercise[week] || '';
       return `
         <details class="rounded-lg bg-black/20">
-          <summary class="flex cursor-pointer items-center justify-between px-3 py-3 text-sm font-bold">
-            <span>${WEEK_LABELS[index]}</span>
-            <span class="text-xs text-slate-400">${log.kg || '-'} kg / ${log.reps || '-'} reps</span>
+          <summary class="flex cursor-pointer items-start justify-between gap-3 px-3 py-3 text-sm font-bold">
+            <span class="min-w-0">
+              <span class="block">${WEEK_LABELS[index]}</span>
+              <span class="mt-1 block text-xs font-semibold leading-5 text-limefire">${escapeHtml(plan || 'Sin plan especifico')}</span>
+            </span>
+            <span class="shrink-0 text-right text-xs text-slate-400">${log.kg || '-'} kg<br>${log.reps || '-'} reps</span>
           </summary>
           <div class="grid grid-cols-2 gap-2 border-t border-white/10 p-3">
+            <div class="col-span-2 rounded-lg border border-limefire/20 bg-limefire/10 p-3 text-sm leading-6 text-slate-100">
+              <span class="block text-xs font-black uppercase text-limefire">Plan ${WEEK_LABELS[index]}</span>
+              ${escapeHtml(plan || 'No hay una consigna distinta para esta semana.')}
+            </div>
             ${inputField('kg', 'Kg', log.kg, key, week, 'number', '0.5')}
             ${inputField('reps', 'Reps', log.reps, key, week, 'number', '1')}
             ${inputField('rir', 'RIR', log.rir, key, week, 'number', '1')}
@@ -823,6 +824,10 @@
           </div>
         </details>
       `;
+    }
+
+    function hasWeeklyPlan(exercise) {
+      return WEEKS.some((week) => Boolean(exercise[week]));
     }
 
     function inputField(field, label, value, key, week, type, step) {
