@@ -344,6 +344,38 @@
       return [...new Set(explanations)];
     }
 
+    function hasSupersetCue(exercise) {
+      const text = normalizeText([
+        exercise?.name,
+        exercise?.s1,
+        exercise?.s2,
+        exercise?.s3,
+        exercise?.s4,
+        exercise?.pause
+      ].filter(Boolean).join(' '));
+      return /\bbi\.?\s*x?\s*\d+\b/.test(text) || text.includes('biserie');
+    }
+
+    function annotateSupersets(routine) {
+      const annotated = routine.map((item) => ({ ...item }));
+      for (let index = 0; index < annotated.length; index += 1) {
+        const item = annotated[index];
+        const next = annotated[index + 1];
+        if (!next || item.supersetId || next.supersetId) continue;
+        if (item.day !== next.day || item.group !== next.group) continue;
+        if (!hasSupersetCue(item)) continue;
+
+        const supersetId = slug(`${item.day}-${item.name}-${next.name}-${index}`);
+        item.supersetId = supersetId;
+        item.supersetRole = 'start';
+        item.supersetLabel = 'Biserie';
+        next.supersetId = supersetId;
+        next.supersetRole = 'end';
+        next.supersetLabel = 'Biserie';
+      }
+      return annotated;
+    }
+
     function buildExerciseHelp(exercise) {
       const guide = findExerciseGuide(exercise.name);
       const prescription = explainPrescription(exercise);
@@ -423,7 +455,7 @@
         });
       });
 
-      return routine;
+      return annotateSupersets(routine);
     }
 
     function parseWarmupSheet(rows) {
@@ -524,6 +556,40 @@
         group.items.push(item);
       });
       return groups;
+    }
+
+    function routineEntries(items) {
+      const annotated = annotateSupersets(items);
+      const entries = [];
+      const consumed = new Set();
+
+      for (let index = 0; index < annotated.length; index += 1) {
+        const item = annotated[index];
+        if (consumed.has(getExerciseKey(item))) continue;
+
+        if (item.supersetId) {
+          const pair = annotated.filter((candidate) => candidate.supersetId === item.supersetId);
+          if (pair.length > 1) {
+            pair.forEach((candidate) => consumed.add(getExerciseKey(candidate)));
+            entries.push({
+              type: 'superset',
+              id: item.supersetId,
+              label: item.supersetLabel || 'Biserie',
+              items: pair
+            });
+            continue;
+          }
+        }
+
+        consumed.add(getExerciseKey(item));
+        entries.push({
+          type: 'exercise',
+          id: getExerciseKey(item),
+          item
+        });
+      }
+
+      return entries;
     }
 
     function allExercises() {
@@ -670,9 +736,35 @@
         <section class="rounded-lg border border-white/10 bg-panel p-3 shadow-glow">
           <h2 class="px-1 pb-2 text-sm font-black uppercase tracking-wide text-slate-300">${escapeHtml(group.title)}</h2>
           <div class="space-y-3">
-            ${group.items.map(renderExercise).join('')}
+            ${routineEntries(group.items).map(renderRoutineEntry).join('')}
           </div>
         </section>
+      `;
+    }
+
+    function renderRoutineEntry(entry) {
+      if (entry.type === 'superset') return renderSuperset(entry);
+      return renderExercise(entry.item);
+    }
+
+    function renderSuperset(entry) {
+      const names = entry.items.map((item) => item.name).join(' + ');
+      const pause = entry.items.find((item) => item.pause)?.pause || '';
+      return `
+        <details class="rounded-lg border border-limefire/30 bg-limefire/10">
+          <summary class="flex cursor-pointer items-center justify-between gap-3 p-3">
+            <div class="min-w-0">
+              <span class="rounded-md bg-limefire px-2 py-1 text-[11px] font-black uppercase text-slate-950">${escapeHtml(entry.label)}</span>
+              <h3 class="mt-2 text-base font-black leading-snug">${escapeHtml(names)}</h3>
+              <p class="mt-1 text-xs text-slate-300">${pause ? `Hacer seguidos y descansar ${escapeHtml(pause)} al final` : 'Hacer los ejercicios seguidos y descansar al terminar la ronda'}</p>
+            </div>
+            <span class="shrink-0 rounded-md bg-black/20 px-2 py-1 text-xs font-bold text-limefire">abrir</span>
+          </summary>
+          <div class="space-y-3 border-t border-limefire/20 p-3">
+            <p class="rounded-lg bg-black/20 p-3 text-sm leading-6 text-slate-200">Esta biserie se lee como un bloque: hace el primer ejercicio, pasa al segundo con el menor descanso posible y recien despues descansa. Carga los datos de cada ejercicio por separado.</p>
+            ${entry.items.map(renderExercise).join('')}
+          </div>
+        </details>
       `;
     }
 

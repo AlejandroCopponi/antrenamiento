@@ -119,6 +119,8 @@ La rutina debe mostrarse agrupada por dia:
 
 Dentro de cada dia, los ejercicios deben mostrarse como listas desplegables o acordeones colapsables.
 
+Algunos ejercicios forman biseries aunque en el Excel aparezcan en filas separadas. La app debe detectar indicaciones como `BI.x3`, `Biserie`, `Biserie x3` o equivalentes y agrupar visualmente el ejercicio de esa fila junto con el ejercicio siguiente del mismo dia/grupo. La biserie debe verse como un bloque unico, aclarando que se hacen ejercicios seguidos y se descansa al final, pero cada ejercicio debe conservar su propia carga de kg, reps, RIR, RPE y notas.
+
 Cada ejercicio debe mostrar:
 
 - Nombre del ejercicio.
