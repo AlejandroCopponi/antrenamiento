@@ -56,6 +56,7 @@
     ];
     const DAYS = ['Dia 1', 'Dia 2', 'Dia 3'];
     const WEEKS = ['w1', 'w2', 'w3', 'w4'];
+    const PLAN_FIELDS = ['s1', 's2', 's3', 's4'];
     const WEEK_LABELS = ['Sem 1', 'Sem 2', 'Sem 3', 'Sem 4'];
 
     let db = loadDb();
@@ -798,7 +799,7 @@
 
     function renderWeekForm(exercise, key, week, index) {
       const log = getLog(exercise, week);
-      const plan = exercise[week] || '';
+      const plan = getWeekPlan(exercise, index);
       return `
         <details class="rounded-lg bg-black/20">
           <summary class="flex cursor-pointer items-start justify-between gap-3 px-3 py-3 text-sm font-bold">
@@ -827,7 +828,11 @@
     }
 
     function hasWeeklyPlan(exercise) {
-      return WEEKS.some((week) => Boolean(exercise[week]));
+      return PLAN_FIELDS.some((field) => Boolean(exercise[field]));
+    }
+
+    function getWeekPlan(exercise, index) {
+      return exercise[PLAN_FIELDS[index]] || '';
     }
 
     function inputField(field, label, value, key, week, type, step) {
